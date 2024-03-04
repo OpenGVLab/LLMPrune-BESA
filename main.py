@@ -59,6 +59,12 @@ def loss_func(l2_loss, sparsity):
     return loss
 
 
+def wrapped_forward(layer, inps, attention_mask=None, position_ids=None, repeat_size=1):
+    attention_mask = attention_mask.repeat(repeat_size, 1, 1, 1) if attention_mask is not None else attention_mask
+    position_ids = position_ids.repeat(repeat_size, 1) if position_ids is not None else position_ids
+    return layer(inps, attention_mask=attention_mask, position_ids=position_ids)
+
+
 def val_epoch(layer, sparse_layers, attention_mask, position_ids, inps, outs, pruned_outs, dense_outs, refer_dense=False):
     refer_outs = dense_outs if refer_dense else outs
     with torch.no_grad():
@@ -70,7 +76,7 @@ def val_epoch(layer, sparse_layers, attention_mask, position_ids, inps, outs, pr
         for begin_idx in range(0, args.nsamples, args.prune_batch_size):
             end_idx = min(args.nsamples, begin_idx + args.prune_batch_size)
             with inference_context:
-                pruned_outs[begin_idx: end_idx,] = layer(inps[begin_idx: end_idx,], attention_mask, position_ids, end_idx - begin_idx)[0]
+                pruned_outs[begin_idx: end_idx,] = wrapped_forward(layer, inps[begin_idx: end_idx,], attention_mask, position_ids, end_idx - begin_idx)[0]
                 if not args.norm_all:
                     l2_scaler = torch.norm(refer_outs[begin_idx: end_idx,].type(torch.float32).reshape((-1, refer_outs[begin_idx: end_idx,].shape[-1])).t(), p=2, dim=1).detach()
                 l2_loss = (((refer_outs[begin_idx: end_idx,] - pruned_outs[begin_idx: end_idx,]) / l2_scaler) ** 2).sum() / pruned_outs[begin_idx: end_idx,].shape[-1]
@@ -93,7 +99,7 @@ def train_epoch(layer, sparse_layers, attention_mask, position_ids, inps, refer_
     for begin_idx in range(0, args.nsamples, args.prune_batch_size):
         end_idx = min(args.nsamples, begin_idx + args.prune_batch_size)
         with inference_context:
-            pruned_out = layer(inps[begin_idx: end_idx,], attention_mask, position_ids, end_idx - begin_idx)[0]
+            pruned_out = wrapped_forward(layer, inps[begin_idx: end_idx,], attention_mask, position_ids, end_idx - begin_idx)[0]
             sparsity = get_sparsity(sparse_layers)
             if not args.norm_all:
                 l2_scaler = torch.norm(refer_outs[begin_idx: end_idx,].type(torch.float32).reshape((-1, refer_outs[begin_idx: end_idx,].shape[-1])).t(), p=2, dim=1).detach()
@@ -278,7 +284,7 @@ def compress_model(model, dataloader):
             refer_outs = pruned_outs if outs is None else outs
             for begin_idx in range(0, args.nsamples, args.prune_batch_size):
                 end_idx = min(args.nsamples, begin_idx + args.prune_batch_size)
-                refer_outs[begin_idx: end_idx,] = layer(inps[begin_idx: end_idx,], attention_mask, position_ids, end_idx - begin_idx)[0]
+                refer_outs[begin_idx: end_idx,] = wrapped_forward(layer, inps[begin_idx: end_idx,], attention_mask, position_ids, end_idx - begin_idx)[0]
                 torch.cuda.empty_cache()
         for h in handles:
             h.remove()
@@ -287,7 +293,7 @@ def compress_model(model, dataloader):
             with inference_context:
                 for begin_idx in range(0, args.nsamples, args.prune_batch_size):
                     end_idx = min(args.nsamples, begin_idx + args.prune_batch_size)
-                    dense_outs[begin_idx: end_idx,] = layer(dense_inps[begin_idx: end_idx,], attention_mask, position_ids, end_idx - begin_idx)[0]
+                    dense_outs[begin_idx: end_idx,] = wrapped_forward(layer, dense_inps[begin_idx: end_idx,], attention_mask, position_ids, end_idx - begin_idx)[0]
                     torch.cuda.empty_cache()
 
         prune_func = grad_prune
